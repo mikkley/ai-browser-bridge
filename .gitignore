@@ -9,9 +9,8 @@ build/
 .env.production
 *.env
 
-# Secrets
-config/secrets.json
-secrets/
+# Generated secrets & state — NEVER commit
+.data/
 
 # OS
 .DS_Store
