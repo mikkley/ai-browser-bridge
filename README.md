@@ -117,12 +117,63 @@ npm run token -- <userId>   # Generate connect code for a user
 npm run info                # Show current relay URL & config
 ```
 
+## Feishu (Lark) Auto-Pairing
+
+No manual code-pasting needed. Pair users automatically via their Feishu `union_id`:
+
+**1. Backend — generate a connect code when user opens your web app**
+
+```js
+// Your server (Node.js example)
+const res = await fetch('https://your-relay.com/token', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ userId: feishu_union_id, secret: RELAY_SECRET }),
+})
+const { connectCode } = await res.json()
+// pass connectCode to frontend
+```
+
+> Use `union_id` (not `open_id`) — it stays the same across all apps under your ISV account.
+
+**2. Frontend — auto-configure the extension via `postMessage`**
+
+```js
+// Any page where your extension's content script runs
+window.postMessage({ type: 'bridge-pair', connectCode }, '*')
+
+// Optional: listen for the result
+window.addEventListener('message', (e) => {
+  if (e.data?.type === 'bridge-pair-result') {
+    console.log(e.data.ok ? 'Paired!' : e.data.error)
+  }
+})
+```
+
+The extension auto-connects to the relay in the background — no popup, no user interaction required.
+
+---
+
 ## Security
 
 - All connections authenticated via JWT (auto-generated on first run)
 - `.data/` directory (secrets + state) is gitignored — never committed
 - Per-user session isolation via userId
 - Relay secret required to generate new tokens
+
+---
+
+## Disclaimer
+
+This extension enables AI agents to operate your browser silently. Use it responsibly:
+
+- **Risk of account suspension**: Websites may detect unusual automation patterns (rapid page loads, scripted form submissions, etc.) and suspend or permanently ban your account. This risk increases with high-frequency or large-scale automated operations.
+- **Terms of Service**: Automated access may violate the Terms of Service of certain websites (e.g. social platforms, e-commerce sites). You are responsible for ensuring your usage complies with applicable ToS.
+- **Data privacy**: The relay server passes commands and results between your AI agent and browser. Deploy your own relay on a trusted server and keep secrets out of version control.
+
+This project is provided as-is for legitimate automation use cases (personal productivity, testing, accessibility). The authors are not responsible for misuse or any consequences arising from automated browsing activity.
+
+---
 
 ## References
 

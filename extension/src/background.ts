@@ -205,6 +205,50 @@ function waitForTabLoad(tabId: number): Promise<void> {
   })
 }
 
+// ── 飞书 / Web 页面自动配对 ─────────────────────────────────────────────
+// 网页调用：window.postMessage({type:'bridge-pair', connectCode:'bridge_ey...'}, '*')
+// content.ts 会将消息转发至此
+
+function parseConnectCode(code: string): { url: string; token: string } | null {
+  try {
+    const raw = code.trim().replace(/^bridge_/, '')
+    return JSON.parse(atob(raw.replace(/-/g, '+').replace(/_/g, '/')))
+  } catch {
+    return null
+  }
+}
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.type === 'pair' && typeof msg.connectCode === 'string') {
+    const parsed = parseConnectCode(msg.connectCode)
+    if (!parsed) {
+      sendResponse({ ok: false, error: 'Invalid connect code' })
+      return true
+    }
+
+    chrome.storage.local
+      .set({ connectCode: msg.connectCode, relayUrl: parsed.url, token: parsed.token })
+      .then(() => {
+        // 断开旧连接，用新配置重连
+        ws?.close()
+        ws = null
+        connect()
+        sendResponse({ ok: true })
+      })
+      .catch((err: Error) => sendResponse({ ok: false, error: err.message }))
+
+    return true // 异步 sendResponse
+  }
+
+  if (msg.action === 'reconnect') {
+    ws?.close()
+    ws = null
+    connect()
+    sendResponse({ ok: true })
+    return true
+  }
+})
+
 // ── 启动 ──────────────────────────────────────────────────────────────────
 
 connect()

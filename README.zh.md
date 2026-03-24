@@ -117,12 +117,63 @@ npm run token -- <userId>   # 为指定用户生成 connect code
 npm run info                # 查看当前 Relay 地址和配置
 ```
 
+## 飞书自动配对
+
+无需用户手动粘贴 connect code。通过飞书 `union_id` 自动完成配对：
+
+**第一步：后端生成 connect code（用户打开你的 web 应用时调用）**
+
+```js
+// 你的服务端（Node.js 示例）
+const res = await fetch('https://your-relay.com/token', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ userId: feishu_union_id, secret: RELAY_SECRET }),
+})
+const { connectCode } = await res.json()
+// 将 connectCode 传给前端
+```
+
+> 使用 `union_id` 而非 `open_id`——`union_id` 在同一 ISV 账号下所有应用中保持一致。
+
+**第二步：前端通过 `postMessage` 自动配置插件**
+
+```js
+// 在任意注入了插件 content script 的页面
+window.postMessage({ type: 'bridge-pair', connectCode }, '*')
+
+// 可选：监听配对结果
+window.addEventListener('message', (e) => {
+  if (e.data?.type === 'bridge-pair-result') {
+    console.log(e.data.ok ? '配对成功！' : e.data.error)
+  }
+})
+```
+
+插件会在后台自动连接 Relay——无弹窗、无需用户操作。
+
+---
+
 ## 安全设计
 
 - 所有连接均通过 JWT 认证（首次启动自动生成）
 - `.data/` 目录（密钥和状态）已加入 `.gitignore`，不会提交到代码库
 - 通过 userId 实现用户间会话隔离
 - 生成 token 需要 relay secret，防止未授权访问
+
+---
+
+## 免责声明
+
+本插件允许 AI Agent 在后台静默操作用户浏览器。请合法、负责任地使用：
+
+- **封号风险**：网站可能会检测到异常的自动化行为（频繁页面加载、脚本化表单提交等），并封禁账号。高频或大规模自动化操作会显著增加此风险。
+- **服务条款**：自动化访问可能违反部分网站（如社交平台、电商平台）的服务条款。使用者有责任确保自己的操作符合相关平台的使用协议。
+- **数据隐私**：Relay 服务器负责在 AI Agent 与浏览器之间传递指令和结果。请将 Relay 部署在受信任的服务器上，并确保密钥不被提交到版本控制系统。
+
+本项目仅供合法的自动化场景使用（个人效率提升、测试、无障碍辅助等），以现状提供，不附任何担保。作者对任何因自动化浏览操作引起的后果不承担责任。
+
+---
 
 ## 参考项目
 
