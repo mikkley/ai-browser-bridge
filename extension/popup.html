@@ -3,30 +3,40 @@
 <head>
   <meta charset="utf-8">
   <style>
-    body { font-family: system-ui; padding: 16px; width: 280px; }
-    h3 { margin: 0 0 12px; font-size: 14px; }
+    body { font-family: system-ui; padding: 16px; width: 300px; }
+    h3 { margin: 0 0 4px; font-size: 14px; }
+    p  { margin: 0 0 12px; font-size: 11px; color: #888; }
     label { font-size: 12px; color: #555; display: block; margin-bottom: 4px; }
-    input { width: 100%; box-sizing: border-box; padding: 6px 8px;
-            border: 1px solid #ddd; border-radius: 4px; font-size: 12px; margin-bottom: 10px; }
-    button { width: 100%; padding: 8px; background: #2563eb; color: #fff;
-             border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
+    textarea {
+      width: 100%; box-sizing: border-box; padding: 6px 8px;
+      border: 1px solid #ddd; border-radius: 4px; font-size: 11px;
+      height: 72px; resize: none; font-family: monospace;
+      margin-bottom: 10px;
+    }
+    button {
+      width: 100%; padding: 8px; background: #2563eb; color: #fff;
+      border: none; border-radius: 4px; cursor: pointer; font-size: 13px;
+    }
     button:hover { background: #1d4ed8; }
     #status { margin-top: 10px; font-size: 12px; text-align: center; }
-    .connected { color: #16a34a; }
-    .disconnected { color: #dc2626; }
+    .ok  { color: #16a34a; }
+    .err { color: #dc2626; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+           margin-right: 6px; background: #d1d5db; }
+    .dot.on { background: #16a34a; }
+    #conn { font-size: 12px; margin-bottom: 12px; color: #555; }
   </style>
 </head>
 <body>
   <h3>AI Browser Bridge</h3>
+  <p>Connects your browser to AI agents — silent, no mouse takeover</p>
 
-  <label>Relay Server URL</label>
-  <input id="relayUrl" type="text" placeholder="wss://your-server.com/ws" />
+  <div id="conn"><span class="dot" id="dot"></span><span id="connText">Not connected</span></div>
 
-  <label>Token</label>
-  <input id="token" type="password" placeholder="Paste your token here" />
+  <label>Connect Code</label>
+  <textarea id="code" placeholder="Paste your connect code here&#10;(bridge_ey...)"></textarea>
 
-  <button id="save">Save & Connect</button>
-
+  <button id="save">Connect</button>
   <div id="status"></div>
 
   <script src="dist/popup.js"></script>
