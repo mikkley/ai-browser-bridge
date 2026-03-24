@@ -124,6 +124,10 @@ npm run info                # Show current relay URL & config
 - Per-user session isolation via userId
 - Relay secret required to generate new tokens
 
+## References
+
+- [opencli](https://github.com/jackwener/opencli) — Turns any website, Electron app, or local CLI tool into a command-line interface, with 50+ platform adapters. The server-side adapter logic from opencli is fully compatible with this extension — use opencli adapters to drive browser commands without any modification.
+
 ## License
 
 MIT
