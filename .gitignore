@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+dist/
+build/
+
+# Environment variables - NEVER commit these
+.env
+.env.local
+.env.production
+*.env
+
+# Secrets
+config/secrets.json
+secrets/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Logs
+*.log
+logs/
+
+# Extension build artifacts
+extension/dist/
+extension/*.crx
+extension/*.pem
