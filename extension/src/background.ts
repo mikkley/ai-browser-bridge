@@ -104,6 +104,7 @@ async function handleCommand(
 }
 
 // 在指定 tab 里执行任意 JS（不抢鼠标，静默执行）
+// script 作为参数传入页面上下文执行，background 本身不用 eval
 async function cmdExecute(params: Record<string, unknown>): Promise<CommandResult> {
   const tabId = await resolveTabId(params)
   const script = params.script as string
@@ -111,7 +112,9 @@ async function cmdExecute(params: Record<string, unknown>): Promise<CommandResul
 
   const results = await chrome.scripting.executeScript({
     target: { tabId },
-    func: new Function(`return (${script})`) as () => unknown,
+    func: (s: string) => (0, eval)(s),
+    args: [script],
+    world: 'MAIN',
   })
   return { ok: true, data: results[0]?.result }
 }
@@ -142,17 +145,16 @@ async function cmdExtract(params: Record<string, unknown>): Promise<CommandResul
   const tabId = await resolveTabId(params)
   const type = (params.type as string) ?? 'text'
 
-  const script =
-    type === 'html'
-      ? 'document.documentElement.outerHTML'
-      : type === 'title'
-        ? 'document.title'
-        : 'document.body.innerText'
+  let func: () => unknown
+  if (type === 'html') {
+    func = () => document.documentElement.outerHTML
+  } else if (type === 'title') {
+    func = () => document.title
+  } else {
+    func = () => document.body.innerText
+  }
 
-  const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: new Function(`return ${script}`) as () => unknown,
-  })
+  const results = await chrome.scripting.executeScript({ target: { tabId }, func, world: 'MAIN' })
   return { ok: true, data: results[0]?.result }
 }
 
