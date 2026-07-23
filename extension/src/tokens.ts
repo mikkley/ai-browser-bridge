@@ -20,6 +20,8 @@ export const AVAILABLE_SCOPES = [
   'screenshot',
   'execute',
   'evalScript',
+  'scraper.list',
+  'scraper.run',
 ] as const
 
 export async function listTokens(): Promise<DeviceToken[]> {

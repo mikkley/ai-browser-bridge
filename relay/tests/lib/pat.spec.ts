@@ -52,4 +52,9 @@ describe('pat', () => {
     }
     expect(isKnownAction('deleteEverything')).toBe(false)
   })
+
+  it('KNOWN_ACTIONS 包含内置 scraper 端点 (为让 PAT scope 能勾)', () => {
+    expect((KNOWN_ACTIONS as readonly string[]).includes('scraper.list')).toBe(true)
+    expect((KNOWN_ACTIONS as readonly string[]).includes('scraper.run')).toBe(true)
+  })
 })

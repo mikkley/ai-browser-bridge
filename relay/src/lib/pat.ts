@@ -48,6 +48,8 @@ export const KNOWN_ACTIONS = [
   'screenshot',
   'execute',
   'evalScript',
+  'scraper.list',
+  'scraper.run',
 ] as const
 export type KnownAction = (typeof KNOWN_ACTIONS)[number]
 

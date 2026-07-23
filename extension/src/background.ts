@@ -1,4 +1,5 @@
 import { RELAY_WS_URL, BRIDGE_ACCESS_KEY } from './config'
+import { getOp, listScrapers } from './scrapers'
 
 // ── 持久 clientId (= deviceId) ───────────────────────────────────────────
 // 首次启动生成 UUID 存 chrome.storage.local，永久持有
@@ -142,6 +143,10 @@ async function handleCommand(
         return await cmdTabs(params)
       case 'screenshot':
         return await cmdScreenshot(params)
+      case 'scraper.list':
+        return await cmdScraperList()
+      case 'scraper.run':
+        return await cmdScraperRun(params)
       default:
         return { ok: false, error: `Unknown action: ${action}` }
     }
@@ -346,6 +351,36 @@ async function cmdScreenshot(params: Record<string, unknown>): Promise<CommandRe
     ? await chrome.tabs.captureVisibleTab({ format: 'png' })
     : await chrome.tabs.captureVisibleTab(windowId, { format: 'png' })
   return { ok: true, data: dataUrl }
+}
+
+// ── Scraper (内置社媒选择器库, 见 scrapers/) ─────────────────────────────
+
+async function cmdScraperList(): Promise<CommandResult> {
+  return { ok: true, data: listScrapers() }
+}
+
+async function cmdScraperRun(params: Record<string, unknown>): Promise<CommandResult> {
+  const platform = params.platform as string
+  const op = params.op as string
+  const args = (params.args ?? {}) as Record<string, unknown>
+  if (!platform || !op) return { ok: false, error: 'platform and op are required' }
+
+  const fn = getOp(platform, op)
+  if (!fn) return { ok: false, error: `unknown scraper: ${platform}.${op}` }
+
+  // scraper 内部会 navigate, 需要一个 tab. 显式传 tabId 就用, 否则挂 AI Tab Group
+  let tabId: number
+  if (typeof params.tabId === 'number') {
+    tabId = params.tabId
+  } else {
+    // 新建 tab 加入 AI group, scraper 内部 navigate 会覆盖它
+    const tab = await chrome.tabs.create({ url: 'about:blank', active: false })
+    tabId = tab.id!
+    await addTabToAiGroup(tabId, tab.windowId!)
+  }
+
+  const result = await fn({ tabId, args })
+  return result
 }
 
 // ── 工具函数 ──────────────────────────────────────────────────────────────
