@@ -1,140 +1,149 @@
 import express from 'express'
 import { WebSocketServer, WebSocket } from 'ws'
 import { createServer } from 'http'
-import jwt from 'jsonwebtoken'
-import { v4 as uuidv4 } from 'uuid'
-import { loadConfig, makeConnectCode } from './config.js'
-import { startTunnel } from './tunnel.js'
 import fs from 'fs'
 import path from 'path'
+import { resolveJwtSecret } from './config.js'
+import { startTunnel } from './tunnel.js'
+import { getDb, closeDb } from './lib/pg.js'
+import { SessionStore } from './lib/sessions.js'
+import { FeishuClient } from './lib/feishu.js'
+import { createFeishuOAuthRouter } from './routes/oauth-feishu.js'
+import { createMeRouter } from './routes/me.js'
+import { createCommandRouter } from './routes/command.js'
+import { verifyUserToken } from './lib/user-token.js'
 
 const STATE_PATH = path.join(process.cwd(), '.data', 'state.json')
-
-// ── 初始化配置（首次自动生成密钥）────────────────────────────────────────
-const config = loadConfig()
-const JWT_SECRET = config.jwtSecret
-const RELAY_SECRET = config.relaySecret
 const PORT = Number(process.env.PORT) || 3000
 const COMMAND_TIMEOUT = 30_000
 
-interface PendingCommand {
-  resolve: (data: unknown) => void
-  reject: (err: Error) => void
-  timer: ReturnType<typeof setTimeout>
+// ── 必填环境变量 ──────────────────────────────────────────────────────────
+
+const ACCESS_KEY = process.env.BRIDGE_ACCESS_KEY
+if (!ACCESS_KEY) {
+  console.error('❌ BRIDGE_ACCESS_KEY env var is required. Generate one with:')
+  console.error("   node -e \"console.log(require('crypto').randomBytes(24).toString('base64url'))\"")
+  process.exit(1)
 }
 
-const sessions = new Map<string, WebSocket>()   // userId → WebSocket
-const pending = new Map<string, PendingCommand>() // commandId → pending
-
-// ── Auth ──────────────────────────────────────────────────────────────────
-
-function verifyToken(token: string): string {
-  const payload = jwt.verify(token, JWT_SECRET) as { userId: string }
-  return payload.userId
+const DATABASE_URL = process.env.DATABASE_URL
+if (!DATABASE_URL) {
+  console.error('❌ DATABASE_URL env var is required (shares marketing-agent pg, see CLAUDE.md)')
+  process.exit(1)
 }
+
+const FEISHU_APP_ID = process.env.FEISHU_APP_ID
+const FEISHU_APP_SECRET = process.env.FEISHU_APP_SECRET
+if (!FEISHU_APP_ID || !FEISHU_APP_SECRET) {
+  console.error('❌ FEISHU_APP_ID / FEISHU_APP_SECRET env vars are required (复用 marketing-agent 的飞书 app)')
+  process.exit(1)
+}
+
+const BRIDGE_FEISHU_REDIRECT_URI = process.env.BRIDGE_FEISHU_REDIRECT_URI
+if (!BRIDGE_FEISHU_REDIRECT_URI) {
+  console.error('❌ BRIDGE_FEISHU_REDIRECT_URI env var is required (需在飞书 app 后台加白名单)')
+  process.exit(1)
+}
+
+const JWT_SECRET = resolveJwtSecret()
+
+// 允许下发的 action 白名单 (服务器层闸门, token scopes 是第二层), 默认不含 evalScript
+const ALLOWED_ACTIONS = new Set(
+  (process.env.ALLOWED_ACTIONS ?? 'navigate,extract,cookies,tabs,screenshot,execute,waitForSelector').split(',').map((s) => s.trim()),
+)
+
+const RATE_LIMIT_RPM = Number(process.env.RATE_LIMIT_RPM ?? 30)
+const JITTER_MIN_MS = Number(process.env.JITTER_MIN_MS ?? 500)
+const JITTER_MAX_MS = Number(process.env.JITTER_MAX_MS ?? 3000)
+
+// 常量时间字符串比较 (防 timing attack; access key 长度可控所以足够)
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return diff === 0
+}
+
+// ── 依赖组装 ──────────────────────────────────────────────────────────────
+
+const db = getDb()
+const sessions = new SessionStore(COMMAND_TIMEOUT)
+const feishu = new FeishuClient({ appId: FEISHU_APP_ID, appSecret: FEISHU_APP_SECRET })
 
 // ── HTTP API ──────────────────────────────────────────────────────────────
 
 const app = express()
 app.use(express.json())
 
-// 健康检查
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, sessions: sessions.size })
+  res.json({ ok: true, sessions: sessions.size() })
 })
 
-// 生成用户 connect code（需要 relay secret 保护）
-app.post('/token', (req, res) => {
-  const { userId, secret } = req.body
-  if (secret !== RELAY_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' })
-  }
-  // publicWsUrl 由启动时注入
-  const code = makeConnectCode(app.locals.publicWsUrl, userId, JWT_SECRET)
-  res.json({ connectCode: code })
-})
-
-// Agent 下发命令
-app.post('/command', async (req, res) => {
-  const authHeader = req.headers.authorization
-  if (!authHeader?.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing token' })
-  }
-  try {
-    verifyToken(authHeader.slice(7))
-  } catch {
-    return res.status(401).json({ error: 'Invalid token' })
-  }
-
-  const { userId, action, params } = req.body
-  if (!userId || !action) {
-    return res.status(400).json({ error: 'userId and action are required' })
-  }
-
-  const ws = sessions.get(userId)
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    return res.status(503).json({ error: 'User browser not connected' })
-  }
-
-  try {
-    const data = await sendCommand(ws, action, params)
-    res.json({ ok: true, data })
-  } catch (err) {
-    res.status(500).json({ ok: false, error: (err as Error).message })
-  }
-})
-
-function sendCommand(ws: WebSocket, action: string, params: unknown): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const id = uuidv4()
-    const timer = setTimeout(() => {
-      pending.delete(id)
-      reject(new Error('Command timed out'))
-    }, COMMAND_TIMEOUT)
-    pending.set(id, { resolve, reject, timer })
-    ws.send(JSON.stringify({ id, action, params }))
-  })
-}
+app.use(createFeishuOAuthRouter(db, feishu, { callbackUrl: BRIDGE_FEISHU_REDIRECT_URI, userTokenSecret: JWT_SECRET }))
+app.use(createMeRouter(db, JWT_SECRET))
+app.use(
+  createCommandRouter(db, sessions, {
+    allowedActions: ALLOWED_ACTIONS,
+    rateLimitRpm: RATE_LIMIT_RPM,
+    jitterMinMs: JITTER_MIN_MS,
+    jitterMaxMs: JITTER_MAX_MS,
+  }),
+)
 
 // ── WebSocket Server（Extension 连进来）──────────────────────────────────
+// 握手: ?deviceId=<uuid>&accessKey=<key>[&userToken=<jwt>]
+// accessKey 是 bootstrap 票据 (防扫端口爬虫); userToken 决定这条连接是否算"已登录", 见 design 段 6.5
 
 const server = createServer(app)
 const wss = new WebSocketServer({ server, path: '/ws' })
 
-wss.on('connection', (ws, req) => {
-  const url = new URL(req.url!, `http://localhost`)
-  const token = url.searchParams.get('token')
+wss.on('connection', async (ws, req) => {
+  const url = new URL(req.url!, 'http://localhost')
+  const accessKey = url.searchParams.get('accessKey') || ''
+  const deviceId = url.searchParams.get('deviceId') || ''
+  const userToken = url.searchParams.get('userToken') || ''
 
-  if (!token) { ws.close(4001, 'Missing token'); return }
-
-  let userId: string
-  try {
-    userId = verifyToken(token)
-  } catch {
-    ws.close(4001, 'Invalid token'); return
+  if (!safeEqual(accessKey, ACCESS_KEY)) {
+    ws.close(4001, 'Invalid access key')
+    return
+  }
+  if (!deviceId || deviceId.length < 8 || deviceId.length > 128) {
+    ws.close(4002, 'Invalid deviceId')
+    return
   }
 
-  // 同一用户重复连接，关掉旧的
-  sessions.get(userId)?.close(4000, 'Replaced by new connection')
-  sessions.set(userId, ws)
-  console.log(`✅ [${userId}] connected  (online: ${sessions.size})`)
+  let authenticated = false
+  if (userToken) {
+    try {
+      const payload = verifyUserToken(userToken, JWT_SECRET)
+      if (payload.deviceId !== deviceId) throw new Error('deviceId mismatch')
+      const row = await db.query(
+        'SELECT device_id FROM bridge_devices WHERE device_id = $1 AND user_id = $2 AND disabled_at IS NULL',
+        [deviceId, payload.sub],
+      )
+      if (!row.rows[0]) throw new Error('device not bound or disabled')
+      authenticated = true
+      void db.query('UPDATE bridge_devices SET last_seen_at = now() WHERE device_id = $1', [deviceId])
+    } catch (err) {
+      ws.close(4003, `Invalid userToken: ${(err as Error).message}`)
+      return
+    }
+  }
 
-  ws.on('message', (raw) => {
-    let msg: { id: string; ok: boolean; data?: unknown; error?: string }
-    try { msg = JSON.parse(raw.toString()) } catch { return }
-    const cmd = pending.get(msg.id)
-    if (!cmd) return
-    clearTimeout(cmd.timer)
-    pending.delete(msg.id)
-    msg.ok ? cmd.resolve(msg.data) : cmd.reject(new Error(msg.error ?? 'Unknown'))
-  })
+  // 同一 deviceId 已有连接: 踢旧的, 保证只有一个活跃 session
+  const old = sessions.set(deviceId, ws, authenticated)
+  old?.close(4000, 'Replaced by new connection')
+
+  console.log(`✅ [${deviceId}] connected (authenticated=${authenticated}, online=${sessions.size()})`)
+
+  ws.on('message', (raw) => sessions.handleMessage(raw.toString()))
 
   ws.on('close', () => {
-    sessions.delete(userId)
-    console.log(`❌ [${userId}] disconnected (online: ${sessions.size})`)
+    sessions.delete(deviceId, ws)
+    console.log(`❌ [${deviceId}] disconnected (online: ${sessions.size()})`)
   })
 
-  ws.on('error', (err) => console.error(`[${userId}] error:`, err.message))
+  ws.on('error', (err) => console.error(`[${deviceId}] error:`, err.message))
 })
 
 // ── 启动 ──────────────────────────────────────────────────────────────────
@@ -144,9 +153,8 @@ async function main() {
   console.log(`\n🚀 AI Browser Bridge Relay`)
   console.log(`${'─'.repeat(50)}`)
 
-  // 优先使用环境变量指定的公网地址（生产部署时设置）
   let publicWsUrl = process.env.PUBLIC_URL
-    ? process.env.PUBLIC_URL.replace(/^https?:\/\//, 'wss://') + '/ws'
+    ? process.env.PUBLIC_URL.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://') + '/ws'
     : null
 
   if (!publicWsUrl) {
@@ -155,8 +163,7 @@ async function main() {
       publicWsUrl = await startTunnel(PORT)
       console.log(`🌐 Public URL:  ${publicWsUrl}`)
     } catch (err) {
-      // 内网/已有公网 IP 时 tunnel 可选
-      publicWsUrl = `wss://localhost:${PORT}/ws`
+      publicWsUrl = `ws://localhost:${PORT}/ws`
       console.log(`⚠️  Tunnel failed, using local: ${publicWsUrl}`)
     }
   } else {
@@ -164,19 +171,17 @@ async function main() {
   }
 
   app.locals.publicWsUrl = publicWsUrl
-
-  // 保存公网 URL 供 CLI 工具读取
+  fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true })
   fs.writeFileSync(STATE_PATH, JSON.stringify({ publicWsUrl }, null, 2))
 
-  // 打印管理员 connect code（用于测试）
-  const adminCode = makeConnectCode(publicWsUrl, 'admin', JWT_SECRET)
-  console.log(`\n🔑 Admin connect code:`)
-  console.log(`   ${adminCode}`)
-  console.log(`\n🔐 Relay secret (用于生成用户 token):`)
-  console.log(`   ${RELAY_SECRET}`)
-  console.log(`\n📋 生成用户 connect code:`)
-  console.log(`   npm run token -- <userId>`)
+  console.log(`\n🔑 Access key (extension/src/config.ts 中的 BRIDGE_ACCESS_KEY):`)
+  console.log(`   ${ACCESS_KEY}`)
   console.log(`${'─'.repeat(50)}\n`)
 }
+
+process.on('SIGTERM', async () => {
+  await closeDb()
+  process.exit(0)
+})
 
 main().catch(console.error)

@@ -1,14 +1,10 @@
-// 用法：npx tsx src/cli.ts token <userId>
-//       npx tsx src/cli.ts info
+// 用法：npx tsx src/cli.ts info
 
-import { loadConfig, makeConnectCode } from './config.js'
 import fs from 'fs'
 import path from 'path'
 
-const [,, cmd, arg] = process.argv
-const config = loadConfig()
+const [, , cmd] = process.argv
 
-// 读取上次启动时记录的公网 URL
 const STATE_PATH = path.join(process.cwd(), '.data', 'state.json')
 
 function getPublicUrl(): string {
@@ -21,30 +17,18 @@ function getPublicUrl(): string {
     : '(server not started yet)'
 }
 
-if (cmd === 'token') {
-  const userId = arg
-  if (!userId) {
-    console.error('Usage: npm run token -- <userId>')
-    process.exit(1)
-  }
+if (cmd === 'info') {
   const publicWsUrl = getPublicUrl()
-  const code = makeConnectCode(publicWsUrl, userId, config.jwtSecret)
-  console.log(`\n✅ Connect code for [${userId}]:`)
-  console.log(`\n   ${code}\n`)
-  console.log('让用户把这串代码粘贴到插件里即可。\n')
-
-} else if (cmd === 'info') {
-  const publicWsUrl = getPublicUrl()
-  const adminCode = makeConnectCode(publicWsUrl, 'admin', config.jwtSecret)
   console.log(`\n📋 AI Browser Bridge — 当前配置`)
   console.log(`${'─'.repeat(50)}`)
   console.log(`🌐 Public WS URL:   ${publicWsUrl}`)
-  console.log(`🔐 Relay secret:    ${config.relaySecret}`)
-  console.log(`\n🔑 Admin connect code:`)
-  console.log(`   ${adminCode}`)
+  console.log(`🔑 Access key:      ${process.env.BRIDGE_ACCESS_KEY ?? '(not set in this shell)'}`)
+  console.log(`🗄  Database URL:    ${process.env.DATABASE_URL ?? '(not set in this shell)'}`)
   console.log(`${'─'.repeat(50)}\n`)
-
+  console.log('用法：')
+  console.log('  - 编辑 extension/src/config.ts 写入 BRIDGE_ACCESS_KEY / API_BASE_URL，重新打包')
+  console.log('  - relay 启动用：BRIDGE_ACCESS_KEY=... DATABASE_URL=... npm start\n')
 } else {
-  console.error('Usage: npm run token -- <userId> | npm run info')
+  console.error('Usage: npm run info')
   process.exit(1)
 }

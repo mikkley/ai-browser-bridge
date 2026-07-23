@@ -1,0 +1,6 @@
+.data/
+dist/
+node_modules/
+tests/
+*.log
+.git/
