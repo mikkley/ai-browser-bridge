@@ -1,183 +1,83 @@
-# ai-browser-bridge
+# AI Browser Bridge
 
-A lightweight Chrome extension that bridges AI agents to the user's browser — silent DOM access, no mouse takeover.
+Chrome 插件 + Relay 服务，让服务器端 AI Agent 静默操作用户已登录的浏览器（不抢鼠标、不用重新登录）。
 
-## How It Works
+## 怎么用（3 步）
 
-```
-AI Agent (Server)
-    ↓  POST /command
-Relay Server              ← deploy on any VPS
-    ↑  WebSocket (browser connects out, no firewall issues)
-Chrome Extension          ← user installs this
-    ↓  chrome.scripting.executeScript
-User's Chrome (logged in, mouse untouched)
-```
+### 1. 安装插件
 
-Users only need to install the extension and paste one connect code. No CLI tools, no technical setup.
+1. `chrome://extensions/` → 打开开发者模式
+2. 加载已解压的扩展程序 → 选 `extension/dist`（或拿到的 zip 解压后的目录）
+3. 点插件图标，弹出 popup
 
-## Quick Start
+### 2. 飞书登录 + 生成 Token
 
-### 1. Deploy Relay Server
+1. Popup 里点 **飞书登录**，走完 SSO
+2. 给这台设备起个名字（比如 "MK-MacBook-Chrome"）
+3. 点 **生成新 Token**，填个用途（比如"给传播洞察用"），勾选允许的操作范围
+4. 复制生成的 `bpt_xxx...`（**只显示一次**，关掉面板就再也看不到明文了）
 
-```bash
-git clone https://github.com/mikkley/ai-browser-bridge
-cd ai-browser-bridge/relay
-npm install
-npm run dev
-```
+### 3. 把 Token 交给 AI
 
-On first start, secrets are auto-generated and a Cloudflare Tunnel is created automatically:
-
-```
-🚀 AI Browser Bridge Relay
-──────────────────────────────────────────────────
-🌐 Public URL:  wss://abc123.trycloudflare.com/ws
-🔑 Admin connect code:
-   bridge_eyJ1cmwiOiJ3c3M6Ly...
-
-🔐 Relay secret: xxxxxxxx
-📋 Generate user connect code:  npm run token -- <userId>
-──────────────────────────────────────────────────
-```
-
-> **Production:** Set `PUBLIC_URL=https://your-domain.com` to skip Cloudflare Tunnel.
-
-### 2. Generate a Connect Code for Each User
+任何 AI 项目拿到这个 token 就能操控你这台浏览器，接入方式只有一个 HTTP 请求：
 
 ```bash
-npm run token -- user123
-# → bridge_eyJ1cmwiOiJ3c3M6Ly...
-```
-
-### 3. User Installs Extension
-
-1. Load `extension/` as an unpacked extension in Chrome
-2. Click the extension icon → paste connect code → Connect
-3. Done — browser is now available to your AI agent
-
----
-
-## Project Structure
-
-```
-ai-browser-bridge/
-├── extension/                  # Chrome Extension (MV3)
-│   ├── manifest.json
-│   ├── popup.html              # Single connect code field
-│   └── src/
-│       ├── background.ts       # WebSocket client + command handler
-│       └── popup.ts            # Paste & connect UI
-│
-├── relay/                      # Relay Server (Node.js + TypeScript)
-│   └── src/
-│       ├── server.ts           # WebSocket hub + HTTP API
-│       ├── config.ts           # Auto-generate secrets on first run
-│       ├── tunnel.ts           # Cloudflare Quick Tunnel
-│       └── cli.ts              # npm run token / npm run info
-│
-├── .env.example
-├── .gitignore                  # .data/ (secrets) excluded
-└── README.md
-```
-
----
-
-## Extension Commands
-
-The extension handles these actions silently (no mouse takeover):
-
-| Action | Description |
-|--------|-------------|
-| `execute` | Run any JS in the page (`element.click()`, etc.) |
-| `navigate` | Open a URL in current or new tab |
-| `extract` | Get page `text`, `html`, or `title` |
-| `cookies` | Get cookies for a domain |
-| `tabs` | List open tabs |
-| `screenshot` | Capture visible tab as PNG |
-
-## Agent API
-
-```bash
-# Send a command to a user's browser
-curl -X POST https://your-relay.com/command \
-  -H "Authorization: Bearer <agent-jwt>" \
+curl -X POST https://<relay-domain>/command \
+  -H "Authorization: Bearer bpt_xxx..." \
   -H "Content-Type: application/json" \
-  -d '{
-    "userId": "user123",
-    "action": "extract",
-    "params": { "type": "text" }
-  }'
+  -d '{"action": "extract", "params": {"type": "text"}}'
 ```
 
-## CLI Tools
+给 AI 开发者的完整接入文档：[`docs/AI_INTEGRATION.md`](docs/AI_INTEGRATION.md)
+
+## 架构
+
+```
+AI Agent (任意项目, 服务器端)
+    ↓  POST /command   Bearer <bpt_xxx PAT>
+Relay Server (Node.js, 与 marketing-agent 共享 Docker/Postgres 部署)
+    ↑  WebSocket        ← 浏览器主动连出, 无防火墙/NAT 问题
+Chrome Extension (MV3)
+    ↓  chrome.scripting.executeScript   ← 静默执行, 不抢鼠标
+用户的 Chrome（已登录, 状态完整）
+```
+
+- 不抢鼠标：所有操作走 `chrome.scripting.executeScript`，不是 CDP 模拟鼠标点击
+- Token 即凭据：不需要 OAuth 授权页、不需要 AI 项目注册，用户自己生成 token 给谁就是谁能用
+- 随时可撤销：popup 里一键撤销任意 token；登出会让所有 token 立即失效（不用逐个撤销）
+
+## 支持的操作
+
+`navigate` / `extract` / `waitForSelector` / `cookies` / `tabs` / `screenshot` / `execute`（白名单预定义脚本）/ `evalScript`（任意 JS，受目标页 CSP 限制，默认关闭）
+
+详细参数见 [`docs/AI_INTEGRATION.md`](docs/AI_INTEGRATION.md)。
+
+## 开发
 
 ```bash
-npm run token -- <userId>   # Generate connect code for a user
-npm run info                # Show current relay URL & config
+# Relay
+cd relay
+npm install
+DATABASE_URL=... BRIDGE_ACCESS_KEY=... BRIDGE_JWT_SECRET=... \
+  FEISHU_APP_ID=... FEISHU_APP_SECRET=... BRIDGE_FEISHU_REDIRECT_URI=... npm run dev
+
+# Extension
+cd extension
+cp src/config.example.ts src/config.ts   # 填 RELAY_WS_URL + BRIDGE_ACCESS_KEY
+npm install && npm run build
 ```
 
-## Feishu (Lark) Auto-Pairing
+更多开发/部署细节见 [`CLAUDE.md`](CLAUDE.md) 和设计文档 [`docs/superpowers/specs/2026-07-22-saas-oauth-bridge-design.md`](docs/superpowers/specs/2026-07-22-saas-oauth-bridge-design.md)。
 
-No manual code-pasting needed. Pair users automatically via their Feishu `union_id`:
+## 免责声明
 
-**1. Backend — generate a connect code when user opens your web app**
+本插件让 AI 代理静默操作你的浏览器，使用前请知晓：
 
-```js
-// Your server (Node.js example)
-const res = await fetch('https://your-relay.com/token', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ userId: feishu_union_id, secret: RELAY_SECRET }),
-})
-const { connectCode } = await res.json()
-// pass connectCode to frontend
-```
+- **账号风险**：网站可能检测到异常自动化行为并限制/封禁账号，高频或大规模自动化操作会显著提高这个风险
+- **服务条款**：自动化访问可能违反部分网站（社媒/电商等）的服务条款，合规责任由使用者自行承担
+- **数据隐私**：relay 服务在你的 AI Agent 和浏览器之间转发命令与结果，请部署在可信的服务器上，密钥不要进版本库
 
-> Use `union_id` (not `open_id`) — it stays the same across all apps under your ISV account.
-
-**2. Frontend — auto-configure the extension via `postMessage`**
-
-```js
-// Any page where your extension's content script runs
-window.postMessage({ type: 'bridge-pair', connectCode }, '*')
-
-// Optional: listen for the result
-window.addEventListener('message', (e) => {
-  if (e.data?.type === 'bridge-pair-result') {
-    console.log(e.data.ok ? 'Paired!' : e.data.error)
-  }
-})
-```
-
-The extension auto-connects to the relay in the background — no popup, no user interaction required.
-
----
-
-## Security
-
-- All connections authenticated via JWT (auto-generated on first run)
-- `.data/` directory (secrets + state) is gitignored — never committed
-- Per-user session isolation via userId
-- Relay secret required to generate new tokens
-
----
-
-## Disclaimer
-
-This extension enables AI agents to operate your browser silently. Use it responsibly:
-
-- **Risk of account suspension**: Websites may detect unusual automation patterns (rapid page loads, scripted form submissions, etc.) and suspend or permanently ban your account. This risk increases with high-frequency or large-scale automated operations.
-- **Terms of Service**: Automated access may violate the Terms of Service of certain websites (e.g. social platforms, e-commerce sites). You are responsible for ensuring your usage complies with applicable ToS.
-- **Data privacy**: The relay server passes commands and results between your AI agent and browser. Deploy your own relay on a trusted server and keep secrets out of version control.
-
-This project is provided as-is for legitimate automation use cases (personal productivity, testing, accessibility). The authors are not responsible for misuse or any consequences arising from automated browsing activity.
-
----
-
-## References
-
-- [opencli](https://github.com/jackwener/opencli) — Turns any website, Electron app, or local CLI tool into a command-line interface, with 50+ platform adapters. The server-side adapter logic from opencli is fully compatible with this extension — use opencli adapters to drive browser commands without any modification.
+本项目按现状提供，仅用于合法的自动化用途（个人效率、测试、无障碍）。作者不为滥用或自动化浏览行为造成的任何后果负责。
 
 ## License
 

@@ -467,7 +467,7 @@ git subtree add --prefix=ai-browser-bridge bridge-upstream main --squash
 □ 换个 action 不在 scope → 403
 □ popup 撤销 → curl 同 token → 401
 □ 换电脑装同插件 → 生成第二台 PAT → 两个 PAT 独立
-□ 登出 → chrome.storage 清 userToken → ws 匿名重连 → curl → 401
+□ 登出 → chrome.storage 清 userToken → ws 匿名重连 → curl 该设备的 PAT → 503 device_offline (未撤销 token 也拿不到设备, 因为匿名连接不算 online)
 ```
 
 ### 11.4 CI
