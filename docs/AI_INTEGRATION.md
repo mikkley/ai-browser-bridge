@@ -210,7 +210,30 @@ def bridge_command(pat: str, action: str, params: dict | None = None):
 text = bridge_command(USER_PAT, "extract", {"type": "text"})
 ```
 
-## 常见工作流：抓一个小红书笔记的评论
+## 用 opencli（推荐给做社媒抓取的 AI）
+
+如果你的 AI 要抓小红书 / B站 / 微博 / 抖音 / 快手等主流中文社媒，别自己写选择器——用 [opencli](https://github.com/jackwener/opencli) 就行。它是社区维护的社媒 CLI，内置各家平台已封装的命令。
+
+**装在 AI 服务器上**（用户端不用装 opencli，只装 bridge 插件）：
+
+```bash
+# 1. 装 opencli
+npm install -g opencli
+
+# 2. 起 adapter (占本地 19826 端口, 假装是 opencli 本地 daemon)
+BRIDGE_URL=https://<relay-domain>/bridge \
+BRIDGE_PAT=bpt_xxx... \
+node examples/adapter.mjs
+
+# 3. 另开一个终端, 让 opencli 把 daemon 请求打到 adapter
+OPENCLI_DAEMON_PORT=19826 opencli doctor
+OPENCLI_DAEMON_PORT=19826 opencli xhs search "AI眼镜"
+OPENCLI_DAEMON_PORT=19826 opencli bilibili comments <video-url>
+```
+
+`examples/adapter.mjs` 干的事：opencli 内部把命令拆成 `exec / navigate / cookies / tabs / screenshot` 等原语 → adapter 翻译成 bridge action → 派发到远端用户浏览器。AI 端不用管选择器改版（opencli 社区在维护）。
+
+## 常见工作流：抓一个小红书笔记的评论 (不用 opencli)
 
 ```js
 const { tabId } = await bridgeCommand(pat, 'navigate', { url: noteUrl })
