@@ -28,3 +28,7 @@ logs/
 extension/dist/
 extension/*.crx
 extension/*.pem
+
+# Agent integration pack (rebuilt on demand)
+agent-integration-pack.zip
+agent-integration-pack/
