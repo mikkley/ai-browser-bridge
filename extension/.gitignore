@@ -1,0 +1,5 @@
+node_modules/
+dist/
+
+# 编译时烤进 dist 的 ACCESS_KEY，绝不进版本库
+src/config.ts

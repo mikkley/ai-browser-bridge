@@ -3,28 +3,77 @@
 <head>
   <meta charset="utf-8">
   <style>
-    body { font-family: system-ui; padding: 16px; width: 300px; }
+    body { font-family: system-ui; padding: 16px; width: 340px; }
     h3 { margin: 0 0 4px; font-size: 14px; }
     p  { margin: 0 0 12px; font-size: 11px; color: #888; }
     label { font-size: 12px; color: #555; display: block; margin-bottom: 4px; }
-    textarea {
+    input, select {
       width: 100%; box-sizing: border-box; padding: 6px 8px;
-      border: 1px solid #ddd; border-radius: 4px; font-size: 11px;
-      height: 72px; resize: none; font-family: monospace;
-      margin-bottom: 10px;
+      border: 1px solid #ddd; border-radius: 4px; font-size: 13px;
+      margin-bottom: 8px;
     }
     button {
       width: 100%; padding: 8px; background: #2563eb; color: #fff;
       border: none; border-radius: 4px; cursor: pointer; font-size: 13px;
     }
     button:hover { background: #1d4ed8; }
-    #status { margin-top: 10px; font-size: 12px; text-align: center; }
+    button.secondary {
+      background: #f3f4f6; color: #374151; border: 1px solid #e5e7eb;
+      margin-top: 8px;
+    }
+    button.secondary:hover { background: #e5e7eb; }
+    button.danger {
+      background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa;
+      margin-top: 8px;
+    }
+    button.danger:hover { background: #ffedd5; }
+    button.success {
+      background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0;
+      margin-top: 8px;
+    }
+    button.success:hover { background: #dcfce7; }
+    button.small { width: auto; padding: 4px 10px; font-size: 11px; margin-top: 0; }
+    #pauseBanner {
+      margin: 8px 0; padding: 6px 8px; border-radius: 4px;
+      font-size: 11px; text-align: center;
+    }
+    #pauseBanner.active   { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+    #pauseBanner.inactive { display: none; }
     .ok  { color: #16a34a; }
     .err { color: #dc2626; }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
            margin-right: 6px; background: #d1d5db; }
     .dot.on { background: #16a34a; }
     #conn { font-size: 12px; margin-bottom: 12px; color: #555; }
+    .box {
+      background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px;
+      padding: 8px; margin-bottom: 12px; font-size: 11px;
+    }
+    .box .lbl { color: #6b7280; margin-bottom: 2px; }
+    .row-flex { display: flex; align-items: center; gap: 6px; }
+    hr { margin: 12px 0; border: none; border-top: 1px solid #eee; }
+    #audit { margin-top: 8px; max-height: 200px; overflow-y: auto;
+             font-size: 11px; border-top: 1px solid #eee; padding-top: 8px; }
+    #audit .row { padding: 4px 0; border-bottom: 1px solid #f3f4f6; line-height: 1.3; }
+    #audit .row:last-child { border-bottom: none; }
+    #audit .meta { color: #9ca3af; font-size: 10px; }
+    #audit .action { color: #374151; font-family: monospace; }
+    #audit .bad { color: #dc2626; }
+    #audit .empty { color: #9ca3af; text-align: center; padding: 16px 0; }
+    .token-row { padding: 8px 0; border-bottom: 1px solid #f3f4f6; }
+    .token-row .prefix { font-family: monospace; font-size: 12px; }
+    .token-row .meta { font-size: 10px; color: #9ca3af; margin-top: 2px; }
+    .scopes { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .scopes label { display: flex; align-items: center; gap: 4px; font-size: 11px; margin: 0; }
+    .scopes input { width: auto; margin: 0; }
+    #plaintextPanel {
+      background: #fefce8; border: 1px solid #fde68a; border-radius: 4px;
+      padding: 10px; margin-bottom: 10px; font-size: 11px;
+    }
+    #plaintextPanel code {
+      display: block; word-break: break-all; background: #fff; padding: 6px;
+      border-radius: 4px; margin: 6px 0; font-size: 11px;
+    }
   </style>
 </head>
 <body>
@@ -33,12 +82,59 @@
 
   <div id="conn"><span class="dot" id="dot"></span><span id="connText">Not connected</span></div>
 
-  <label>Connect Code</label>
-  <textarea id="code" placeholder="Paste your connect code here&#10;(bridge_ey...)"></textarea>
+  <!-- ── 未登录视图 ─────────────────────────────────────────── -->
+  <div id="view-loggedout" hidden>
+    <button id="loginBtn">飞书登录</button>
+    <div id="loginStatus" style="margin-top:8px;font-size:12px;text-align:center;"></div>
+  </div>
 
-  <button id="save">Connect</button>
-  <div id="status"></div>
+  <!-- ── 已登录视图 ─────────────────────────────────────────── -->
+  <div id="view-loggedin" hidden>
+    <div class="box">
+      <div class="lbl">已登录</div>
+      <div class="row-flex">
+        <span id="userName" style="font-weight:500;"></span>
+      </div>
+      <div class="row-flex" style="margin-top:6px;">
+        <input id="deviceNameInput" placeholder="给这台设备起个名字" style="margin-bottom:0;">
+        <button id="saveDeviceNameBtn" class="small secondary">保存</button>
+      </div>
+    </div>
 
-  <script src="dist/popup.js"></script>
+    <button id="reconnectBtn" class="secondary">Reconnect</button>
+    <button id="pauseBtn" class="danger">Pause AI access</button>
+    <div id="pauseBanner" class="inactive">⛔ AI access paused — agents will be denied</div>
+
+    <button id="gotoTokensBtn" class="secondary">管理 Token (<span id="tokenCount">0</span>)</button>
+    <button id="logoutBtn" class="secondary">登出</button>
+
+    <hr>
+    <button id="auditBtn" class="secondary">View AI activity</button>
+    <div id="audit" hidden></div>
+  </div>
+
+  <!-- ── Token 管理视图 ─────────────────────────────────────────── -->
+  <div id="view-tokens" hidden>
+    <button id="backBtn" class="secondary">← 返回</button>
+
+    <div id="plaintextPanel" hidden>
+      <div>⚠️ 只显示一次，请立即复制</div>
+      <code id="plaintextCode"></code>
+      <button id="copyPlaintextBtn" class="small">复制</button>
+      <button id="dismissPlaintextBtn" class="small secondary">完成</button>
+    </div>
+
+    <div id="tokenList"></div>
+
+    <hr>
+    <label>Token 用途</label>
+    <input id="tokenLabelInput" placeholder="例如: for 传播洞察">
+    <label>允许的操作</label>
+    <div class="scopes" id="scopeCheckboxes"></div>
+    <button id="createTokenBtn">生成新 Token</button>
+    <div id="createTokenStatus" style="margin-top:8px;font-size:12px;text-align:center;"></div>
+  </div>
+
+  <script type="module" src="dist/popup.js"></script>
 </body>
 </html>
