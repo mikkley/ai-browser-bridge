@@ -1,0 +1,45 @@
+{
+  "name": "@bluefocus/bridge-opencli-adapter",
+  "version": "0.1.0",
+  "description": "OpenCLI IPage adapter for ai-browser-bridge — 让 AI agent 用 opencli 命令通过 bridge 远程操控用户浏览器",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@jackwener/opencli": "^1.8.0"
+  },
+  "peerDependenciesMeta": {
+    "@jackwener/opencli": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^4.1.0"
+  },
+  "keywords": [
+    "ai-browser-bridge",
+    "opencli",
+    "browser-automation",
+    "chrome-extension"
+  ],
+  "author": "MK (BlueFocus IMC)",
+  "license": "MIT"
+}
