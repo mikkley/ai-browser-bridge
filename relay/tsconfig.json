@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
-    "module": "commonjs",
+    "target": "ES2022",
+    // ESM: @jackwener/opencli 是 ESM-only 包 (package.json exports + type: module),
+    // CJS 下既 static import 不了也解析不了它的 exports 字段类型.
+    // relay 的 import 本来就都带 .js 后缀 (ESM 风格), 切过来只需改 tsconfig + type: module.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "outDir": "dist",
     "rootDir": "src",
     "strict": true,
