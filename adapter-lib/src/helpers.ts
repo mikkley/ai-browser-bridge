@@ -1,16 +1,46 @@
+import { createRequire } from 'node:module'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { BridgePage, type BridgePageOptions } from './bridge-page.js'
+
+const require = createRequire(import.meta.url)
+let opencliRootCache: string | null = null
+
+/**
+ * @jackwener/opencli 的 package.json `exports` 严格限制了外部 import 路径 —
+ * 只有 `.` `./registry` `./errors` `./types` 等在白名单里。`./clis/*.js`
+ * 不可直接 import。绕过办法: 通过一个已 export 的 subpath (`registry`)
+ * 找到 dist 位置, 上溯到包 root, 拼绝对路径用 file:// URL import。
+ */
+function getOpencliRoot(): string {
+  if (opencliRootCache) return opencliRootCache
+  const regPath = require.resolve('@jackwener/opencli/registry')
+  // registry 在 dist/src/registry-api.js, 上 2 层到 opencli 根
+  opencliRootCache = path.resolve(path.dirname(regPath), '..', '..')
+  return opencliRootCache
+}
+
+/**
+ * 触发一条 opencli 命令的副作用注册. 只需在进程生命周期内调一次.
+ * Agent 端不需要提前 static import — 第一次 runOpencliCommand 会自动 load.
+ */
+export async function loadOpencliCommand(site: string, name: string): Promise<void> {
+  const file = path.join(getOpencliRoot(), 'clis', site, `${name}.js`)
+  await import(pathToFileURL(file).href)
+}
+
+interface RegistryModule {
+  getRegistry: () => Map<string, { func: (page: unknown, args: Record<string, unknown>) => Promise<unknown> }>
+}
 
 /**
  * 跑一条 opencli 命令.
  *
- * 前提: 调用方已经 import 了目标 command 文件让 opencli registry 注册,
- * 因为 opencli 用 `discovery.ts` 扫 fs 收集命令, 那个逻辑在浏览器/无
- * ~/.opencli 目录的环境下跑不了, 需要手动 import.
+ * - 内部用 BridgePage 让 opencli 通过 bridge relay 操控用户浏览器
+ * - registry key 是 `site/name` (opencli 用 slash 分隔, 不是 dot)
+ * - 第一次调用会自动 loadOpencliCommand(site, name) 副作用注册
  *
  * 例:
- *   import '@jackwener/opencli/dist/clis/xiaohongshu/search.js'   // 副作用注册
- *   import { runOpencliCommand } from '@bluefocus/bridge-opencli-adapter'
- *
  *   const notes = await runOpencliCommand(
  *     'xiaohongshu', 'search',
  *     { query: 'AI眼镜', limit: 30 },
@@ -23,41 +53,33 @@ export async function runOpencliCommand(
   args: Record<string, unknown>,
   opts: BridgePageOptions,
 ): Promise<unknown> {
-  // 动态 import 让 adapter-lib 不硬依赖 @jackwener/opencli (peer dep)
-  // 用 @ts-ignore 因为 peer dep 可选装, tsc 不 resolve
-  let registryMod: { getRegistry: () => Map<string, { func: (page: unknown, args: Record<string, unknown>) => Promise<unknown> }> }
+  let registryMod: RegistryModule
   try {
     // @ts-ignore -- peer dep, 运行时才装
-    registryMod = (await import('@jackwener/opencli/registry')) as never
+    registryMod = (await import('@jackwener/opencli/registry')) as RegistryModule
   } catch (err) {
-    throw new Error(
-      `未找到 @jackwener/opencli, 请先在 agent 项目里 npm install: ${(err as Error).message}`,
-    )
+    throw new Error(`未找到 @jackwener/opencli, 请先 npm install: ${(err as Error).message}`)
   }
 
-  const registry = registryMod.getRegistry()
-  const key = `${site}.${name}`
-  const cmd = registry.get(key)
+  const key = `${site}/${name}`
+  let cmd = registryMod.getRegistry().get(key)
   if (!cmd) {
-    throw new Error(
-      `opencli command '${key}' 没找到. 请先在 agent 里 import ` +
-        `'@jackwener/opencli/dist/clis/${site}/${name}.js' 触发副作用注册.`,
-    )
+    // 第一次调用: 自动 load 触发副作用注册
+    await loadOpencliCommand(site, name)
+    cmd = registryMod.getRegistry().get(key)
+    if (!cmd) {
+      throw new Error(
+        `opencli command '${key}' 加载后仍未注册. 检查 @jackwener/opencli/clis/${site}/${name}.js 是否存在.`,
+      )
+    }
   }
 
   const page = new BridgePage(opts)
   return await cmd.func(page, args)
 }
 
-/**
- * 列出当前已注册的 opencli 命令 (调用方 import 了多少个就有多少个).
- * 用于 admin/debug — agent 不建议动态发现, 该 import 什么在 agent
- * build 时就应该固定.
- */
 export async function listRegisteredCommands(): Promise<string[]> {
   // @ts-ignore -- peer dep
-  const registryMod = (await import('@jackwener/opencli/registry')) as never as {
-    getRegistry: () => Map<string, unknown>
-  }
+  const registryMod = (await import('@jackwener/opencli/registry')) as RegistryModule
   return Array.from(registryMod.getRegistry().keys())
 }

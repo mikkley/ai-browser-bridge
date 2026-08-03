@@ -11,6 +11,7 @@ import { FeishuClient } from './lib/feishu.js'
 import { createFeishuOAuthRouter } from './routes/oauth-feishu.js'
 import { createMeRouter } from './routes/me.js'
 import { createCommandRouter } from './routes/command.js'
+import { createAdminRouter } from './routes/admin.js'
 import { createOpencliRouter } from './routes/opencli.js'
 import { isOpencliAvailable } from './opencli/runner.js'
 import { verifyUserToken } from './lib/user-token.js'
@@ -89,6 +90,7 @@ app.get('/health', (_req, res) => {
 
 app.use(createFeishuOAuthRouter(db, feishu, { callbackUrl: BRIDGE_FEISHU_REDIRECT_URI, userTokenSecret: JWT_SECRET }))
 app.use(createMeRouter(db, JWT_SECRET))
+app.use(createAdminRouter(db, JWT_SECRET))
 app.use(
   createCommandRouter(db, sessions, {
     allowedActions: ALLOWED_ACTIONS,
