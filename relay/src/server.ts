@@ -11,6 +11,8 @@ import { FeishuClient } from './lib/feishu.js'
 import { createFeishuOAuthRouter } from './routes/oauth-feishu.js'
 import { createMeRouter } from './routes/me.js'
 import { createCommandRouter } from './routes/command.js'
+import { createOpencliRouter } from './routes/opencli.js'
+import { isOpencliAvailable } from './opencli/runner.js'
 import { verifyUserToken } from './lib/user-token.js'
 
 const STATE_PATH = path.join(process.cwd(), '.data', 'state.json')
@@ -56,6 +58,12 @@ const RATE_LIMIT_RPM = Number(process.env.RATE_LIMIT_RPM ?? 30)
 const JITTER_MIN_MS = Number(process.env.JITTER_MIN_MS ?? 500)
 const JITTER_MAX_MS = Number(process.env.JITTER_MAX_MS ?? 3000)
 
+// POST /opencli 开关. 开着才允许 agent 用 opencli 的 177 网站命令 (relay 侧跑,
+// agent 端零安装). 关掉 = relay 退回纯链接器, 只提供 /command low-level 原语.
+const ENABLE_OPENCLI = process.env.ENABLE_OPENCLI !== 'false'
+// 一条 opencli 命令的总超时 (内部 5-15 次 WS 派发 + 页面等待, 比单条 command 长)
+const OPENCLI_TIMEOUT_MS = Number(process.env.OPENCLI_TIMEOUT_MS ?? 120_000)
+
 // 常量时间字符串比较 (防 timing attack; access key 长度可控所以足够)
 function safeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false
@@ -87,6 +95,13 @@ app.use(
     rateLimitRpm: RATE_LIMIT_RPM,
     jitterMinMs: JITTER_MIN_MS,
     jitterMaxMs: JITTER_MAX_MS,
+  }),
+)
+app.use(
+  createOpencliRouter(db, sessions, {
+    enabled: ENABLE_OPENCLI,
+    rateLimitRpm: RATE_LIMIT_RPM,
+    commandTimeoutMs: OPENCLI_TIMEOUT_MS,
   }),
 )
 
@@ -176,6 +191,15 @@ async function main() {
 
   console.log(`\n🔑 Access key (extension/src/config.ts 中的 BRIDGE_ACCESS_KEY):`)
   console.log(`   ${ACCESS_KEY}`)
+
+  // opencli 状态显式打出来 — 排查 "POST /opencli 返 501" 时第一眼能看到原因
+  if (!ENABLE_OPENCLI) {
+    console.log(`\n🧩 opencli: 已通过 ENABLE_OPENCLI=false 关闭`)
+  } else if (isOpencliAvailable()) {
+    console.log(`\n🧩 opencli: 可用 (POST /opencli), 命令超时 ${OPENCLI_TIMEOUT_MS}ms`)
+  } else {
+    console.log(`\n⚠️  opencli: ENABLE_OPENCLI 开着但 @jackwener/opencli 没装, POST /opencli 会返 501`)
+  }
   console.log(`${'─'.repeat(50)}\n`)
 }
 

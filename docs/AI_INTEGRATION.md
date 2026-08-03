@@ -41,10 +41,13 @@ curl -X POST https://<relay-domain>/command \
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `POST` | `/command` | 下发命令，`Authorization: Bearer <PAT>` |
+| `POST` | `/command` | 下发单个 low-level 命令，`Authorization: Bearer <PAT>` |
+| `POST` | `/opencli` | **跑一条 opencli 命令**（177 网站的成熟社媒抓取，零安装）见下方专节 |
 | `GET` | `/health` | 健康检查（可选，用于自己的监控） |
 
 其余 `/login/*` `/api/me/*` 是插件专用的，不需要你调。
+
+> **抓小红书/B站/微博这类主流社媒，直接跳到 [`POST /opencli`](#抓主流社媒-postopencli推荐零安装) 一节**——比自己用 low-level 拼选择器省事得多。下面的 action 清单适合冷门网站/内部系统。
 
 ## `action` 完整清单
 
@@ -210,30 +213,76 @@ def bridge_command(pat: str, action: str, params: dict | None = None):
 text = bridge_command(USER_PAT, "extract", {"type": "text"})
 ```
 
-## 用 opencli（推荐给做社媒抓取的 AI）
+## 抓主流社媒: `POST /opencli`（推荐，零安装）
 
-如果你的 AI 要抓小红书 / B站 / 微博 / 抖音 / 快手等主流中文社媒，别自己写选择器——用 [opencli](https://github.com/jackwener/opencli) 就行。它是社区维护的社媒 CLI，内置各家平台已封装的命令。
+要抓小红书 / B站 / 微博 / 抖音 / 知乎 等 **177 个网站**，别自己写选择器——relay 内置了 [OpenCLI](https://github.com/jackwener/OpenCLI)（社区维护的成熟社媒 CLI，每条命令自带选择器 + 交互流程 + 数据模型 + 边界处理）。
 
-**装在 AI 服务器上**（用户端不用装 opencli，只装 bridge 插件）：
+**你的接入成本 = 一个 HTTP 请求**。不用装 opencli，不用 Node 环境，不用起 daemon。
 
 ```bash
-# 1. 装 opencli
-npm install -g opencli
-
-# 2. 起 adapter (占本地 19826 端口, 假装是 opencli 本地 daemon)
-BRIDGE_URL=https://<relay-domain>/bridge \
-BRIDGE_PAT=bpt_xxx... \
-node examples/adapter.mjs
-
-# 3. 另开一个终端, 让 opencli 把 daemon 请求打到 adapter
-OPENCLI_DAEMON_PORT=19826 opencli doctor
-OPENCLI_DAEMON_PORT=19826 opencli xhs search "AI眼镜"
-OPENCLI_DAEMON_PORT=19826 opencli bilibili comments <video-url>
+curl -X POST https://<relay-domain>/opencli \
+  -H "Authorization: Bearer bpt_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "site": "xiaohongshu",
+    "op": "search",
+    "args": { "query": "AI眼镜", "limit": 30 }
+  }'
 ```
 
-`examples/adapter.mjs` 干的事：opencli 内部把命令拆成 `exec / navigate / cookies / tabs / screenshot` 等原语 → adapter 翻译成 bridge action → 派发到远端用户浏览器。AI 端不用管选择器改版（opencli 社区在维护）。
+成功：`{ "ok": true, "tabId": 4242, "result": [ ...笔记数组... ] }`
+失败：`{ "ok": false, "tabId": 4242, "error": { "code": "...", "message": "...", "hint": "..." } }`
 
-## 常见工作流：抓一个小红书笔记的评论 (不用 opencli)
+（`tabId` 成功失败都返——失败时用户可以去那个 tab 看现场。）
+
+### PAT scope 要求
+
+PAT 必须**同时**含 `navigate` + `evalScript` + `cookies` 三个 scope，缺哪个响应里会说清楚。
+
+为什么要 `evalScript`：opencli 命令确实在用户浏览器里执行 JS（只不过是 opencli 社区维护的开源代码，不是 AI 现编的）。用户勾这个 scope 就是知情授权。
+
+### 常用 site / op
+
+| site | 常用 op |
+|---|---|
+| `xiaohongshu` | `search` `comments` `feed` `user` `creator-notes` `creator-note-detail` `liked` `saved` |
+| `bilibili` | `search` `comments` `user` `feed` |
+| `weibo` | `search` `comments` `user` |
+| `zhihu` | `search` `comments` `user` |
+| `douyin` | `search` `comments` `user` |
+
+**site 用全名**（`xiaohongshu` 不是 `xhs`）。op 清单看 [OpenCLI 仓库的 `clis/<site>/`](https://github.com/jackwener/OpenCLI/tree/main/clis) 目录（每个 `.js` 文件名就是一个 op）。
+
+### `/opencli` 特有错误码
+
+| HTTP | code | 含义 |
+|---|---|---|
+| 501 | `opencli_disabled` | 部署方设了 `ENABLE_OPENCLI=false` |
+| 501 | `opencli_unavailable` | relay 容器里没装 `@jackwener/opencli` |
+| 404 | `command_not_found` | site/op 拼错，或该网站没这个命令 |
+| 422 | `not_implemented` | **该命令依赖 CDP AX tree**（`click`/`upload`/`snapshot`）——扩展用 `chrome.scripting` 没 debugger 权限。换只读类命令，或让用户手动完成这一步 |
+| 504 | `opencli_timeout` | 整条命令超时（默认 120s）。页面慢或 `limit` 太大，减小重试 |
+| 400 | `invalid_request` | `site`/`op` 缺失或含非法字符（只允许字母数字下划线连字符） |
+
+其余错误码（401/403/429/503）跟 `/command` 一致。
+
+### 能力边界
+
+**支持**：只读类命令（`search` / `comments` / `feed` / `user` / `*-detail` / `*-stats`）——这些只用 `goto` + `evaluate` + `getCookies` + `fetchJson`。
+
+**不支持**：交互类命令（`publish` / `follow` / `delete-note` / `draft-*`）——依赖 opencli 的 AX tree selector reference 格式，返 `422 not_implemented`。
+
+### `/opencli` vs `/command`
+
+| 场景 | 用 |
+|---|---|
+| 主流社媒的复杂抓取（搜索/评论/翻页/解析） | **`/opencli`** — 一个请求搞定，选择器 opencli 社区维护 |
+| 冷门网站 / 内部后台 / 用户自建 SaaS | **`/command`** — opencli 没适配，自己拼 low-level 原语 |
+| 简单动作（打开一个 URL / 读一段文字 / 截图） | **`/command`** — 用不着 opencli 那么重 |
+
+**注意**：`/opencli` 跟 `/command` **共用同一个 rate limit**（每设备默认 30 次/分钟）。一条 opencli 命令只算 **1** 次限速，但内部有 5-15 次浏览器往返，所以实际耗时 1-3 秒。
+
+## 常见工作流：抓一个小红书笔记的评论（用 `/command` 手拼）
 
 ```js
 const { tabId } = await bridgeCommand(pat, 'navigate', { url: noteUrl })

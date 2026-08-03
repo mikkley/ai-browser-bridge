@@ -1,20 +1,12 @@
 import { Router } from 'express'
 import type { Db } from '../lib/pg.js'
 import type { SessionStore } from '../lib/sessions.js'
-import { hashToken, isValidTokenFormat, isKnownAction } from '../lib/pat.js'
+import { isKnownAction } from '../lib/pat.js'
+import { extractBearer, verifyPat, touchToken } from '../lib/pat-verify.js'
 import { writeAudit } from '../lib/audit.js'
 import { checkRateLimit } from '../lib/rate-limit.js'
 import { jitterDelay } from '../lib/jitter.js'
 import { DeviceTimeoutError } from '../lib/sessions.js'
-
-interface PairingTokenRow {
-  jti: string
-  user_id: string
-  device_id: string
-  scopes: string[]
-  revoked_at: string | null
-  expires_at: string | null
-}
 
 export interface CommandRouterOptions {
   allowedActions: Set<string>
@@ -29,29 +21,11 @@ export function createCommandRouter(db: Db, sessions: SessionStore, opts: Comman
 
   router.post('/command', async (req, res) => {
     const start = Date.now()
-    const authHeader = req.headers.authorization
-    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : ''
-
-    if (!token || !isValidTokenFormat(token)) {
-      return res.status(401).json({ ok: false, error: { code: 'invalid_token', message: 'Missing or malformed bearer token' } })
+    const verified = await verifyPat(db, extractBearer(req.headers.authorization))
+    if (!verified.ok) {
+      return res.status(verified.status).json({ ok: false, error: { code: verified.code, message: verified.message } })
     }
-
-    const hash = hashToken(token)
-    const result = await db.query<PairingTokenRow>(
-      `SELECT jti, user_id, device_id, scopes, revoked_at, expires_at
-       FROM bridge_pairing_tokens WHERE token_hash = $1`,
-      [hash],
-    )
-    const row = result.rows[0]
-    if (!row) {
-      return res.status(401).json({ ok: false, error: { code: 'invalid_token', message: 'Token not found' } })
-    }
-    if (row.revoked_at) {
-      return res.status(401).json({ ok: false, error: { code: 'token_revoked', message: 'Token has been revoked' } })
-    }
-    if (row.expires_at && new Date(row.expires_at).getTime() < Date.now()) {
-      return res.status(401).json({ ok: false, error: { code: 'token_expired', message: 'Token has expired' } })
-    }
+    const row = verified.row
 
     const { action, params } = req.body ?? {}
     if (typeof action !== 'string' || !action) {
@@ -114,12 +88,4 @@ export function createCommandRouter(db: Db, sessions: SessionStore, opts: Comman
   })
 
   return router
-}
-
-async function touchToken(db: Db, jti: string, ip: string | undefined): Promise<void> {
-  try {
-    await db.query('UPDATE bridge_pairing_tokens SET last_used_at = now(), last_used_ip = $2 WHERE jti = $1', [jti, ip ?? null])
-  } catch (err) {
-    console.error('[command] touchToken failed:', (err as Error).message)
-  }
 }
